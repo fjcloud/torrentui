@@ -104,11 +104,11 @@ func NewServer(config *Config) (*Server, error) {
 	// Configure torrent client
 	clientConfig := torrent.NewDefaultClientConfig()
 	clientConfig.DataDir = config.DownloadDir
-	
+
 	// Disable piece completion database to prevent "already complete" issues
 	clientConfig.DisableAcceptRateLimiting = false
 	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir)
-	
+
 	clientConfig.NoUpload = false
 	clientConfig.DisableTrackers = false
 	clientConfig.DisableWebseeds = false
@@ -512,7 +512,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // handleCheckAuth handles GET /api/auth/check
 func (s *Server) handleCheckAuth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	// If no auth configured, always return true
 	if s.config.Username == "" {
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -723,22 +723,22 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 
 	// Get torrent info before dropping
 	info := t.Info()
-	
+
 	// Drop the torrent (removes from client and cleans up state)
 	t.Drop()
-	
+
 	// Clean up seeding tracking
 	delete(s.seedStartTimes, infoHash)
-	
+
 	// Always delete files to prevent "already complete" issue
 	if info != nil {
 		torrentPath := filepath.Join(s.config.DownloadDir, info.Name)
 		os.RemoveAll(torrentPath)
-		
+
 		// Clean up cache files
 		torrentFile := filepath.Join(s.config.DownloadDir, info.Name+".torrent")
 		os.Remove(torrentFile)
-		
+
 		stateFiles := []string{
 			filepath.Join(s.config.DownloadDir, "."+info.Name+".state"),
 			filepath.Join(s.config.DownloadDir, info.Name+".fastresume"),
@@ -747,7 +747,7 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 			os.Remove(f)
 		}
 	}
-	
+
 	log.Printf("Deleted torrent: %s", infoHash)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1117,7 +1117,7 @@ func loadConfig() *Config {
 	username := getEnv("TORRENTUI_USERNAME", "")
 	password := getEnv("TORRENTUI_PASSWORD", "")
 	secureCookie := getEnv("TORRENTUI_SECURE_COOKIE", "false") == "true"
-	
+
 	var passwordHash string
 	if password != "" {
 		var err error
@@ -1199,7 +1199,7 @@ func main() {
 
 	// Setup routes and start server
 	mux := server.setupRoutes()
-	
+
 	if config.Username != "" {
 		log.Printf("TorrentUI starting on %s (authentication enabled)", config.ListenAddr)
 	} else {
