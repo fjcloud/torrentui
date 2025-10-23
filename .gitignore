@@ -1,0 +1,29 @@
+# Binary
+torrentui
+
+# Data directories
+downloads/
+session/
+logs/
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.log
+/tmp/
+
