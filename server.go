@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,8 @@ type Config struct {
 	PasswordHash        string
 	SessionTimeout      time.Duration
 	SecureCookie        bool
+	TorrentListenPort   int
+	PublicIP            string
 }
 
 // Torrent represents a torrent in the API
@@ -109,11 +112,30 @@ func NewServer(config *Config) (*Server, error) {
 	clientConfig.DisableAcceptRateLimiting = false
 	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir)
 
+	// Enable seeding and peer connections
 	clientConfig.NoUpload = false
 	clientConfig.DisableTrackers = false
 	clientConfig.DisableWebseeds = false
 	clientConfig.DisableWebtorrent = false
 	clientConfig.DisablePEX = false
+	clientConfig.Seed = true
+
+	// Configure listening port for incoming connections (seeding)
+	if config.TorrentListenPort > 0 {
+		clientConfig.ListenPort = config.TorrentListenPort
+		clientConfig.DisableIPv6 = false
+		log.Printf("Torrent client listening on port %d for incoming connections", config.TorrentListenPort)
+	}
+
+	// Set public IP if configured (helps with seeding)
+	if config.PublicIP != "" {
+		clientConfig.PublicIp4 = net.ParseIP(config.PublicIP)
+		if clientConfig.PublicIp4 != nil {
+			log.Printf("Using public IP: %s", config.PublicIP)
+		} else {
+			log.Printf("⚠️  Invalid PUBLIC_IP format: %s", config.PublicIP)
+		}
+	}
 
 	// Set rate limits if configured
 	if config.MaxUploadRateKBPS > 0 {
@@ -1137,6 +1159,8 @@ func loadConfig() *Config {
 		PasswordHash:        passwordHash,
 		SessionTimeout:      time.Duration(getEnvInt64("SESSION_TIMEOUT_HOURS", 24)) * time.Hour,
 		SecureCookie:        secureCookie,
+		TorrentListenPort:   int(getEnvInt64("TORRENT_LISTEN_PORT", 0)),
+		PublicIP:            getEnv("PUBLIC_IP", ""),
 	}
 
 	// Security warnings

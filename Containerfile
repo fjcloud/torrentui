@@ -54,7 +54,8 @@ ENV TORRENTUI_LISTEN_ADDR=:8080 \
     TORRENTUI_MAX_UPLOAD_RATE_KBPS=0 \
     TORRENTUI_MAX_DOWNLOAD_RATE_KBPS=0
 
-# Expose port
+# Expose port (8080 for web UI)
+# Note: Torrent port is dynamic by default (set TORRENT_LISTEN_PORT if needed)
 EXPOSE 8080
 
 # Switch to non-root user
