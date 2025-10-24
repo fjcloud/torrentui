@@ -124,7 +124,7 @@ func NewServer(config *Config) (*Server, error) {
 	if config.TorrentListenPort > 0 {
 		clientConfig.ListenPort = config.TorrentListenPort
 		clientConfig.DisableIPv6 = false
-		log.Printf("Torrent client listening on port %d for incoming connections", config.TorrentListenPort)
+		log.Printf("Torrent client listening on port %d (TCP+UDP) for incoming connections", config.TorrentListenPort)
 	}
 
 	// Set public IP if configured (helps with seeding)
