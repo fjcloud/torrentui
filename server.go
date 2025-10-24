@@ -32,7 +32,7 @@ var staticFiles embed.FS
 type Config struct {
 	ListenAddr          string
 	DownloadDir         string
-	SessionDir          string
+	DataDir             string // Metadata, torrents, database
 	MaxUploadRateKBPS   int64
 	MaxDownloadRateKBPS int64
 	Username            string
@@ -100,17 +100,17 @@ func NewServer(config *Config) (*Server, error) {
 	if err := os.MkdirAll(config.DownloadDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create download directory: %w", err)
 	}
-	if err := os.MkdirAll(config.SessionDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create session directory: %w", err)
+	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	// Configure torrent client
 	clientConfig := torrent.NewDefaultClientConfig()
-	clientConfig.DataDir = config.DownloadDir
+	clientConfig.DataDir = config.DataDir // Metadata goes here
 
 	// Disable piece completion database to prevent "already complete" issues
 	clientConfig.DisableAcceptRateLimiting = false
-	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir)
+	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir) // Downloads go here
 
 	// Enable seeding and peer connections
 	clientConfig.NoUpload = false
@@ -151,13 +151,59 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create torrent client: %w", err)
 	}
 
-	return &Server{
+	server := &Server{
 		config:         config,
 		client:         client,
 		seedStartTimes: make(map[string]time.Time),
 		sessions:       make(map[string]*Session),
 		loginLimiters:  make(map[string]*rate.Limiter),
-	}, nil
+	}
+
+	// Load existing torrents from disk
+	if err := server.loadTorrentsFromDisk(); err != nil {
+		log.Printf("Warning: failed to load torrents from disk: %v", err)
+	}
+
+	return server, nil
+}
+
+// loadTorrentsFromDisk loads all .torrent files from the torrents directory
+func (s *Server) loadTorrentsFromDisk() error {
+	torrentsDir := filepath.Join(s.config.DataDir, "torrents")
+	if err := os.MkdirAll(torrentsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create torrents directory: %w", err)
+	}
+
+	files, err := os.ReadDir(torrentsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read torrents directory: %w", err)
+	}
+
+	loaded := 0
+	for _, file := range files {
+		if !file.IsDir() && filepath.Ext(file.Name()) == ".torrent" {
+			torrentPath := filepath.Join(torrentsDir, file.Name())
+			t, err := s.client.AddTorrentFromFile(torrentPath)
+			if err != nil {
+				log.Printf("Failed to load torrent %s: %v", file.Name(), err)
+				continue
+			}
+
+			// Wait for info and start downloading
+			<-t.GotInfo()
+			t.DownloadAll()
+			t.AllowDataUpload()
+
+			loaded++
+			log.Printf("Loaded torrent: %s", t.Name())
+		}
+	}
+
+	if loaded > 0 {
+		log.Printf("Loaded %d torrent(s) from disk", loaded)
+	}
+
+	return nil
 }
 
 // Close gracefully shuts down the server
@@ -637,10 +683,19 @@ func (s *Server) handlePostTorrents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("Added torrent: %s", t.Name())
-
 		// Start downloading
 		<-t.GotInfo()
+
+		// Save torrent file persistently
+		torrentsDir := filepath.Join(s.config.DataDir, "torrents")
+		os.MkdirAll(torrentsDir, 0755)
+		persistentPath := filepath.Join(torrentsDir, t.InfoHash().HexString()+".torrent")
+		if err := os.WriteFile(persistentPath, fileContent, 0644); err != nil {
+			log.Printf("Warning: failed to save torrent file: %v", err)
+		}
+
+		log.Printf("Added torrent: %s", t.Name())
+
 		t.DownloadAll()
 
 		// Allow data upload for seeding
@@ -766,6 +821,11 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 
 	// Clean up seeding tracking
 	delete(s.seedStartTimes, infoHash)
+
+	// Delete persisted .torrent file
+	torrentsDir := filepath.Join(s.config.DataDir, "torrents")
+	persistedTorrent := filepath.Join(torrentsDir, infoHash+".torrent")
+	os.Remove(persistedTorrent)
 
 	// Always delete files to prevent "already complete" issue
 	if info != nil {
@@ -1167,7 +1227,7 @@ func loadConfig() *Config {
 	config := &Config{
 		ListenAddr:          getEnv("LISTEN_ADDR", ":8080"),
 		DownloadDir:         getEnv("DOWNLOAD_DIR", "./downloads"),
-		SessionDir:          getEnv("SESSION_DIR", "./session"),
+		DataDir:             getEnv("DATA_DIR", "./data"),
 		MaxUploadRateKBPS:   getEnvInt64("MAX_UPLOAD_RATE_KBPS", 0),
 		MaxDownloadRateKBPS: getEnvInt64("MAX_DOWNLOAD_RATE_KBPS", 0),
 		Username:            username,

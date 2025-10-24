@@ -40,8 +40,8 @@ make test          # Run tests
 
 Environment variables:
 - `TORRENTUI_LISTEN_ADDR` (default: :8080) - Web UI listen address
-- `TORRENTUI_DOWNLOAD_DIR` (default: ./downloads) - Download directory
-- `TORRENTUI_SESSION_DIR` (default: ./session) - Session data directory
+- `DOWNLOAD_DIR` (default: ./downloads) - Downloaded files directory
+- `DATA_DIR` (default: ./data) - Metadata, torrents, database directory
 - `TORRENTUI_LOG_FILE` (optional) - Log file path
 - `TORRENTUI_USERNAME` (optional) - Enables authentication
 - `TORRENTUI_PASSWORD` (optional) - Required if username is set
@@ -96,10 +96,10 @@ Images are automatically built and published to GitHub Container Registry:
 # Pull latest
 docker pull ghcr.io/fjcloud/torrentui:latest
 
-# Run
+# Run (only mount downloads for data files)
 docker run -p 8080:8080 \
   -v ./downloads:/app/downloads \
-  -v ./session:/app/session \
+  -v ./data:/app/data \
   -e TORRENTUI_USERNAME=admin \
   -e TORRENTUI_PASSWORD=your-password \
   ghcr.io/fjcloud/torrentui:latest
@@ -107,7 +107,7 @@ docker run -p 8080:8080 \
 # Run with fixed seeding port (optional, for port forwarding)
 docker run -p 8080:8080 -p 42069:42069 \
   -v ./downloads:/app/downloads \
-  -v ./session:/app/session \
+  -v ./data:/app/data \
   -e TORRENTUI_USERNAME=admin \
   -e TORRENTUI_PASSWORD=your-password \
   -e TORRENT_LISTEN_PORT=42069 \

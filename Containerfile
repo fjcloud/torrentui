@@ -43,14 +43,14 @@ COPY --from=builder /tmp/torrentui /app/torrentui
 COPY --from=builder /workspace/static /app/static
 
 # Create necessary directories
-RUN mkdir -p /app/downloads /app/session /app/logs && \
+RUN mkdir -p /app/downloads /app/data /app/logs && \
     chown -R torrentui:0 /app && \
     chmod -R 777 /app
 
 # Set environment variables
 ENV TORRENTUI_LISTEN_ADDR=:8080 \
-    TORRENTUI_DOWNLOAD_DIR=/app/downloads \
-    TORRENTUI_SESSION_DIR=/app/session \
+    DOWNLOAD_DIR=/app/downloads \
+    DATA_DIR=/app/data \
     TORRENTUI_MAX_UPLOAD_RATE_KBPS=0 \
     TORRENTUI_MAX_DOWNLOAD_RATE_KBPS=0
 
