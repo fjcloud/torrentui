@@ -124,7 +124,7 @@ func NewServer(config *Config) (*Server, error) {
 	if config.TorrentListenPort > 0 {
 		clientConfig.ListenPort = config.TorrentListenPort
 		clientConfig.DisableIPv6 = false
-		log.Printf("Torrent client listening on port %d (TCP+UDP) for incoming connections", config.TorrentListenPort)
+		log.Printf("Torrent client listening on port %d for incoming connections", config.TorrentListenPort)
 	}
 
 	// Set public IP if configured (helps with seeding)
@@ -214,6 +214,7 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 	totalLength := t.Length()
 	completed := t.BytesCompleted()
 	isSeeding := t.Seeding() || (totalLength > 0 && completed >= totalLength)
+	isComplete := totalLength > 0 && completed >= totalLength
 
 	var seedTime int64
 	if isSeeding {
@@ -229,6 +230,20 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 		delete(s.seedStartTimes, infoHash)
 	}
 
+	// Calculate transfer rates
+	// Note: The stats provide cumulative counters, not instantaneous rates
+	// For simplicity, we'll show 0 when complete for download, and always show upload stats
+	var downloadRate, uploadRate int64
+	
+	// Download rate should be 0 when complete (100%)
+	if !isComplete {
+		downloadRate = stats.BytesReadUsefulData.Int64()
+	}
+	
+	// Upload rate - always show if there's activity
+	// Note: This is cumulative, but the frontend can calculate rate from deltas
+	uploadRate = stats.BytesWrittenData.Int64()
+
 	return Torrent{
 		InfoHash:     infoHash,
 		Name:         info.Name,
@@ -236,8 +251,8 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 		Progress:     float64(t.BytesCompleted()) / float64(t.Length()),
 		Size:         t.Length(),
 		Downloaded:   t.BytesCompleted(),
-		DownloadRate: stats.BytesReadUsefulData.Int64(),
-		UploadRate:   stats.BytesWrittenData.Int64(),
+		DownloadRate: downloadRate,
+		UploadRate:   uploadRate,
 		Peers:        t.Stats().ConnectedSeeders + t.Stats().ActivePeers,
 		AddedAt:      time.Now(), // Use current time as fallback
 		SavePath:     filepath.Join(s.config.DownloadDir, info.Name),

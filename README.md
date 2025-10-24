@@ -47,7 +47,7 @@ Environment variables:
 - `TORRENTUI_PASSWORD` (optional) - Required if username is set
 - `TORRENTUI_SECURE_COOKIE` (default: false) - Set to true with HTTPS
 - `SESSION_TIMEOUT_HOURS` (default: 24) - Session timeout in hours
-- `TORRENT_LISTEN_PORT` (default: 0, random) - Port for incoming connections (TCP+UDP, for seeding)
+- `TORRENT_LISTEN_PORT` (default: 0, random) - Port for incoming torrent connections (seeding)
 - `PUBLIC_IP` (optional) - Your public IP address (improves seeding)
 
 ## Authentication
@@ -105,8 +105,7 @@ docker run -p 8080:8080 \
   ghcr.io/fjcloud/torrentui:latest
 
 # Run with fixed seeding port (optional, for port forwarding)
-# Note: Forward both TCP and UDP on your router
-docker run -p 8080:8080 -p 42069:42069/tcp -p 42069:42069/udp \
+docker run -p 8080:8080 -p 42069:42069 \
   -v ./downloads:/app/downloads \
   -v ./session:/app/session \
   -e TORRENTUI_USERNAME=admin \
