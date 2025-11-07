@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,12 +84,23 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+// torrentStats tracks bytes transferred for rate calculation
+type torrentStats struct {
+	lastUpdate       time.Time
+	lastBytesRead    int64
+	lastBytesWritten int64
+	downloadRate     int64 // bytes per second
+	uploadRate       int64 // bytes per second
+}
+
 // Server holds the application state
 type Server struct {
 	config         *Config
 	client         *torrent.Client
-	seedStartTimes map[string]time.Time // Track when seeding started for each torrent
-	sessions       map[string]*Session  // Active sessions
+	seedStartTimes map[string]time.Time     // Track when seeding started for each torrent
+	torrentStats   map[string]*torrentStats // Track transfer rates
+	statsMux       sync.RWMutex
+	sessions       map[string]*Session // Active sessions
 	sessionsMux    sync.RWMutex
 	loginLimiters  map[string]*rate.Limiter // Rate limiters per IP
 	limitersMux    sync.RWMutex
@@ -155,6 +167,7 @@ func NewServer(config *Config) (*Server, error) {
 		config:         config,
 		client:         client,
 		seedStartTimes: make(map[string]time.Time),
+		torrentStats:   make(map[string]*torrentStats),
 		sessions:       make(map[string]*Session),
 		loginLimiters:  make(map[string]*rate.Limiter),
 	}
@@ -246,6 +259,58 @@ func getTorrentStatus(t *torrent.Torrent) string {
 	return "paused"
 }
 
+// updateTorrentStats calculates real-time transfer rates
+func (s *Server) updateTorrentStats(infoHash string, currentRead, currentWritten int64) (downloadRate, uploadRate int64) {
+	s.statsMux.Lock()
+	defer s.statsMux.Unlock()
+
+	now := time.Now()
+	tStats, exists := s.torrentStats[infoHash]
+
+	if !exists {
+		// First time seeing this torrent, initialize stats
+		s.torrentStats[infoHash] = &torrentStats{
+			lastUpdate:       now,
+			lastBytesRead:    currentRead,
+			lastBytesWritten: currentWritten,
+			downloadRate:     0,
+			uploadRate:       0,
+		}
+		return 0, 0
+	}
+
+	// Calculate time delta in seconds
+	timeDelta := now.Sub(tStats.lastUpdate).Seconds()
+	if timeDelta < 0.1 {
+		// Too soon, return cached rates
+		return tStats.downloadRate, tStats.uploadRate
+	}
+
+	// Calculate bytes delta
+	bytesReadDelta := currentRead - tStats.lastBytesRead
+	bytesWrittenDelta := currentWritten - tStats.lastBytesWritten
+
+	// Calculate rates (bytes per second)
+	if bytesReadDelta < 0 {
+		bytesReadDelta = 0 // Handle counter reset
+	}
+	if bytesWrittenDelta < 0 {
+		bytesWrittenDelta = 0 // Handle counter reset
+	}
+
+	downloadRate = int64(float64(bytesReadDelta) / timeDelta)
+	uploadRate = int64(float64(bytesWrittenDelta) / timeDelta)
+
+	// Update stored stats
+	tStats.lastUpdate = now
+	tStats.lastBytesRead = currentRead
+	tStats.lastBytesWritten = currentWritten
+	tStats.downloadRate = downloadRate
+	tStats.uploadRate = uploadRate
+
+	return downloadRate, uploadRate
+}
+
 // torrentToAPI converts a torrent.Torrent to our API Torrent struct
 func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 	if t == nil {
@@ -276,19 +341,20 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 		delete(s.seedStartTimes, infoHash)
 	}
 
-	// Calculate transfer rates
-	// Note: The stats provide cumulative counters, not instantaneous rates
-	// For simplicity, we'll show 0 when complete for download, and always show upload stats
-	var downloadRate, uploadRate int64
-	
+	// Calculate real transfer rates (bytes per second)
+	currentRead := stats.BytesReadUsefulData.Int64()
+	currentWritten := stats.BytesWrittenData.Int64()
+	downloadRate, uploadRate := s.updateTorrentStats(infoHash, currentRead, currentWritten)
+
 	// Download rate should be 0 when complete (100%)
-	if !isComplete {
-		downloadRate = stats.BytesReadUsefulData.Int64()
+	if isComplete {
+		downloadRate = 0
 	}
-	
-	// Upload rate - always show if there's activity
-	// Note: This is cumulative, but the frontend can calculate rate from deltas
-	uploadRate = stats.BytesWrittenData.Int64()
+
+	// Upload rate should be 0 if not seeding
+	if !isSeeding {
+		uploadRate = 0
+	}
 
 	return Torrent{
 		InfoHash:     infoHash,
@@ -633,6 +699,12 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	for _, t := range s.client.Torrents() {
 		torrents = append(torrents, s.torrentToAPI(t))
 	}
+
+	// Sort by InfoHash for stable ordering
+	sort.Slice(torrents, func(i, j int) bool {
+		return torrents[i].InfoHash < torrents[j].InfoHash
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(torrents)
 }
@@ -821,6 +893,11 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 
 	// Clean up seeding tracking
 	delete(s.seedStartTimes, infoHash)
+
+	// Clean up transfer rate tracking
+	s.statsMux.Lock()
+	delete(s.torrentStats, infoHash)
+	s.statsMux.Unlock()
 
 	// Delete persisted .torrent file
 	torrentsDir := filepath.Join(s.config.DataDir, "torrents")
