@@ -192,62 +192,82 @@ class TorrentUI {
             return;
         }
 
-        container.innerHTML = `<div class="torrents-grid">${torrents.map(t => `
-            <div class="torrent-card ${this.selectedTorrent === t.infoHash ? 'selected' : ''}" 
-                 onclick="torrentUI.selectTorrent('${t.infoHash}')">
-                <div class="torrent-header">
-                    <div>
-                        <div class="torrent-name">${this.escapeHtml(t.name)}</div>
-                        <div class="torrent-size">${this.formatBytes(t.size)}</div>
-                    </div>
-                    <span class="torrent-status status-${t.status}">${t.status}</span>
-                </div>
+        container.innerHTML = `<div class="torrents-list">${torrents.map(t => {
+            const progressPct = Math.round(t.progress * 100);
+            const statusEmoji = {
+                'downloading': '⬇️',
+                'seeding': '⬆️',
+                'paused': '⏸️',
+                'stopped': '⏹️'
+            }[t.status] || '•';
+            
+            return `
+            <div class="torrent-item status-${t.status}">
+                <div class="status-indicator"></div>
                 
-                <div class="progress">
-                    <div class="progress-bar" style="width: ${t.progress * 100}%"></div>
-                </div>
-                
-                <div class="torrent-stats">
-                    <div class="stat">
-                        <div class="stat-label">Progress</div>
-                        <div class="stat-value">${Math.round(t.progress * 100)}%</div>
+                <div class="torrent-main">
+                    <div class="torrent-header">
+                        <div class="torrent-name" title="${this.escapeHtml(t.name)}">
+                            ${this.escapeHtml(t.name)}
+                        </div>
+                        <span class="torrent-status status-${t.status}">
+                            ${statusEmoji} ${t.status}
+                        </span>
                     </div>
-                    <div class="stat">
-                        <div class="stat-label">Download</div>
-                        <div class="stat-value">${this.formatSpeed(t.downloadRate)}</div>
+                    
+                    <div class="progress">
+                        <div class="progress-bar" style="width: ${progressPct}%"></div>
                     </div>
-                    <div class="stat">
-                        <div class="stat-label">Upload</div>
-                        <div class="stat-value">${this.formatSpeed(t.uploadRate)}</div>
+                    
+                    <div class="torrent-stats">
+                        <div class="stat">
+                            <span class="stat-value">${progressPct}%</span>
+                            <span class="stat-label">• ${this.formatBytes(t.size)}</span>
+                        </div>
+                        ${t.downloadRate > 0 ? `
+                        <div class="stat">
+                            <span class="stat-icon">⬇</span>
+                            <span class="stat-value">${this.formatSpeed(t.downloadRate)}</span>
+                        </div>
+                        ` : ''}
+                        ${t.uploadRate > 0 ? `
+                        <div class="stat">
+                            <span class="stat-icon">⬆</span>
+                            <span class="stat-value">${this.formatSpeed(t.uploadRate)}</span>
+                        </div>
+                        ` : ''}
+                        ${t.peers > 0 ? `
+                        <div class="stat">
+                            <span class="stat-icon">👥</span>
+                            <span class="stat-value">${t.peers}</span>
+                        </div>
+                        ` : ''}
+                        ${t.seeding && t.seededBytes > 0 ? `
+                        <div class="stat">
+                            <span class="stat-label">Seeded:</span>
+                            <span class="stat-value">${this.formatBytes(t.seededBytes)}</span>
+                        </div>
+                        ` : ''}
                     </div>
-                    <div class="stat">
-                        <div class="stat-label">Peers</div>
-                        <div class="stat-value">${t.peers}</div>
-                    </div>
-                    ${t.seeding ? `
-                    <div class="stat">
-                        <div class="stat-label">Seeded</div>
-                        <div class="stat-value">${this.formatBytes(t.seededBytes)}</div>
-                    </div>
-                    ` : ''}
                 </div>
                 
                 <div class="torrent-actions">
                     <button class="btn-${t.seeding ? 'danger' : 'success'}" 
-                            onclick="event.stopPropagation(); torrentUI.toggleSeeding('${t.infoHash}', ${!t.seeding})">
-                        ${t.seeding ? 'Stop Seeding' : 'Start Seeding'}
+                            onclick="torrentUI.toggleSeeding('${t.infoHash}', ${!t.seeding})">
+                        ${t.seeding ? '⏸ Stop' : '▶ Seed'}
                     </button>
                     <button class="btn-primary" 
-                            onclick="event.stopPropagation(); torrentUI.exportTorrent('${t.infoHash}')">
-                        Export
+                            onclick="torrentUI.exportTorrent('${t.infoHash}')">
+                        📤 Export
                     </button>
                     <button class="btn-danger" 
-                            onclick="event.stopPropagation(); torrentUI.deleteTorrent('${t.infoHash}', false)">
-                        Delete
+                            onclick="torrentUI.deleteTorrent('${t.infoHash}', false)">
+                        🗑 Delete
                     </button>
                 </div>
             </div>
-        `).join('')}</div>`;
+        `;
+        }).join('')}</div>`;
     }
 
     async selectTorrent(infoHash) {
