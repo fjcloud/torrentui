@@ -60,6 +60,7 @@ type Torrent struct {
 	Seeding      bool      `json:"seeding"`
 	SeededBytes  int64     `json:"seededBytes"`
 	SeedTime     int64     `json:"seedTime"`
+	Ratio        float64   `json:"ratio"`
 }
 
 // TorrentFile represents a file within a torrent
@@ -131,6 +132,15 @@ func NewServer(config *Config) (*Server, error) {
 	clientConfig.DisableWebtorrent = false
 	clientConfig.DisablePEX = false
 	clientConfig.Seed = true
+
+	// Optimize for seeding: increase connection limits
+	clientConfig.EstablishedConnsPerTorrent = 200 // Max connections per torrent
+	clientConfig.HalfOpenConnsPerTorrent = 50     // Max half-open connections
+	clientConfig.TorrentPeersHighWater = 200      // High water mark for peers
+	clientConfig.TorrentPeersLowWater = 50        // Low water mark for peers
+
+	// Announce more frequently to trackers to maximize visibility
+	clientConfig.MinDialTimeout = 3 * time.Second
 
 	// Configure listening port for incoming connections (seeding)
 	if config.TorrentListenPort > 0 {
@@ -356,6 +366,19 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 		uploadRate = 0
 	}
 
+	// Calculate ratio (uploaded / downloaded)
+	var ratio float64
+	downloaded := t.BytesCompleted()
+	uploaded := currentWritten
+	if downloaded > 0 {
+		ratio = float64(uploaded) / float64(downloaded)
+	} else if uploaded > 0 {
+		// If we've uploaded but not downloaded, ratio is infinite (show as large number)
+		ratio = 999.99
+	} else {
+		ratio = 0.0
+	}
+
 	return Torrent{
 		InfoHash:     infoHash,
 		Name:         info.Name,
@@ -371,6 +394,7 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 		Seeding:      isSeeding,
 		SeededBytes:  stats.BytesWrittenData.Int64(),
 		SeedTime:     seedTime,
+		Ratio:        ratio,
 	}
 }
 

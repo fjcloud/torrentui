@@ -224,6 +224,13 @@ class TorrentUI {
                             <span class="stat-value">${progressPct}%</span>
                             <span class="stat-label">• ${this.formatBytes(t.size)}</span>
                         </div>
+                        ${t.ratio !== undefined ? `
+                        <div class="stat stat-ratio">
+                            <span class="stat-icon">📊</span>
+                            <span class="stat-label">Ratio:</span>
+                            <span class="stat-value ratio-${this.getRatioClass(t.ratio)}">${this.formatRatio(t.ratio)}</span>
+                        </div>
+                        ` : ''}
                         ${t.downloadRate > 0 ? `
                         <div class="stat">
                             <span class="stat-icon">⬇</span>
@@ -399,6 +406,19 @@ class TorrentUI {
 
     formatSpeed(bytesPerSecond) {
         return this.formatBytes(bytesPerSecond) + '/s';
+    }
+
+    formatRatio(ratio) {
+        if (ratio >= 999) return '∞';
+        if (ratio >= 10) return ratio.toFixed(1);
+        return ratio.toFixed(2);
+    }
+
+    getRatioClass(ratio) {
+        if (ratio >= 2.0) return 'excellent'; // 2.0+ = excellent
+        if (ratio >= 1.0) return 'good';      // 1.0-2.0 = good
+        if (ratio >= 0.5) return 'fair';      // 0.5-1.0 = fair
+        return 'poor';                         // < 0.5 = poor
     }
 
     escapeHtml(text) {
