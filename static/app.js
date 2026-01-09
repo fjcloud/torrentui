@@ -237,22 +237,17 @@ class TorrentUI {
                             <span class="stat-value">${this.formatSpeed(t.downloadRate)}</span>
                         </div>
                         ` : ''}
-                        ${t.uploadRate > 0 ? `
-                        <div class="stat">
+                        ${t.seeding || t.uploadRate > 0 || t.seededBytes > 0 ? `
+                        <div class="stat stat-upload">
                             <span class="stat-icon">⬆</span>
-                            <span class="stat-value">${this.formatSpeed(t.uploadRate)}</span>
+                            <span class="stat-value">${t.uploadRate > 0 ? this.formatSpeed(t.uploadRate) : '0 B/s'}</span>
+                            <span class="stat-label">• ${this.formatBytes(t.seededBytes || 0)} total</span>
                         </div>
                         ` : ''}
                         ${t.peers > 0 ? `
                         <div class="stat">
                             <span class="stat-icon">👥</span>
                             <span class="stat-value">${t.peers}</span>
-                        </div>
-                        ` : ''}
-                        ${t.seeding && t.seededBytes > 0 ? `
-                        <div class="stat">
-                            <span class="stat-label">Seeded:</span>
-                            <span class="stat-value">${this.formatBytes(t.seededBytes)}</span>
                         </div>
                         ` : ''}
                     </div>

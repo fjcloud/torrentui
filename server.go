@@ -173,6 +173,11 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create torrent client: %w", err)
 	}
 
+	// Log torrent client info
+	log.Printf("✅ Torrent client started")
+	log.Printf("   Listen address: %s", client.ListenAddrs())
+	log.Printf("   Peer ID: %s", client.PeerID())
+
 	server := &Server{
 		config:         config,
 		client:         client,
@@ -181,6 +186,24 @@ func NewServer(config *Config) (*Server, error) {
 		sessions:       make(map[string]*Session),
 		loginLimiters:  make(map[string]*rate.Limiter),
 	}
+
+	// Start a goroutine to periodically log upload stats
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			for _, t := range client.Torrents() {
+				if t.Seeding() {
+					stats := t.Stats()
+					log.Printf("📤 Upload Stats [%s]: %d bytes uploaded, %d active conns, %d peers total",
+						t.Name(),
+						stats.BytesWrittenData.Int64(),
+						stats.ActivePeers,
+						stats.ConnectedSeeders+stats.ActivePeers)
+				}
+			}
+		}
+	}()
 
 	// Load existing torrents from disk
 	if err := server.loadTorrentsFromDisk(); err != nil {
@@ -790,12 +813,21 @@ func (s *Server) handlePostTorrents(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Warning: failed to save torrent file: %v", err)
 		}
 
-		log.Printf("Added torrent: %s", t.Name())
+		log.Printf("✅ Added torrent: %s (InfoHash: %s)", t.Name(), t.InfoHash().HexString())
+
+		// Log tracker info
+		if metaInfo := t.Metainfo(); metaInfo.Announce != "" {
+			log.Printf("   📡 Tracker: %s", metaInfo.Announce)
+		}
+		if announceList := t.Metainfo().AnnounceList; len(announceList) > 0 {
+			log.Printf("   📡 %d tracker tiers configured", len(announceList))
+		}
 
 		t.DownloadAll()
 
 		// Allow data upload for seeding
 		t.AllowDataUpload()
+		log.Printf("   📤 Upload enabled for: %s", t.Name())
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
