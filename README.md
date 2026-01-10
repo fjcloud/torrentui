@@ -20,9 +20,44 @@ Open http://localhost:8080
 
 - Drag & drop .torrent files
 - Download management
-- Seeding support
+- Seeding support with ratio tracking
 - Modern UI (Inter font)
 - Optional authentication
+- Real-time upload/download stats
+- Persistent torrents across restarts
+
+## Testing & Troubleshooting
+
+### 🧪 Test Your Seeding Port
+
+```bash
+# Quick port test
+python3 test-bt-handshake.py your-server-ip your-port
+
+# Example
+python3 test-bt-handshake.py 23.88.40.56 32767
+```
+
+**Note:** Using `curl` will show "Connection reset" - this is **NORMAL**! BitTorrent protocol ≠ HTTP. See [TESTING.md](TESTING.md) for details.
+
+### 📚 Documentation
+
+- **[TESTING.md](TESTING.md)** - Complete testing guide, troubleshooting zero upload, understanding tcpdump output
+- **[PORT_CONFIGURATION.md](PORT_CONFIGURATION.md)** - Port setup, firewall config, router forwarding, connectivity issues
+
+### 🔍 Quick Diagnostics
+
+```bash
+# Check upload is working
+podman logs torrentui | grep "Upload Stats"
+# Should show: 📤 Upload Stats [...]: bytes uploaded, X active conns, Y peers total
+
+# Verify port is open
+python3 test-bt-handshake.py $(curl -s ifconfig.me) YOUR_PORT
+
+# Monitor real-time
+sudo tcpdump -i any port YOUR_PORT -n
+```
 
 ## Commands
 
