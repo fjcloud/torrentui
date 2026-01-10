@@ -45,6 +45,106 @@ sudo firewall-cmd --list-ports
 telnet ton-serveur.com 42069
 ```
 
+## 🧪 Comment Tester le Port BitTorrent
+
+### ⚠️ ATTENTION: curl Ne Fonctionne PAS !
+
+Si tu essaies:
+```bash
+curl ton-serveur:42069
+# Résultat: Connection reset by peer
+```
+
+**C'est NORMAL ! Ça ne veut PAS dire que le port est fermé !**
+
+Le serveur BitTorrent **rejette** la requête HTTP de curl parce que:
+- BitTorrent utilise un **protocole binaire** spécifique
+- curl envoie du **HTTP** (`GET / HTTP/1.1`)
+- Le serveur voit que ce n'est pas un handshake BitTorrent valide
+- Il ferme la connexion immédiatement (RST)
+
+**Si tu vois "Connected" avant le "reset", ton port EST OUVERT ! ✅**
+
+### ✅ Tests Corrects
+
+#### Méthode 1: Script Python (recommandé)
+
+```bash
+# Télécharger le script de test
+wget https://raw.githubusercontent.com/fjcloud/torrentui/main/test-bt-handshake.py
+
+# Tester ton port
+python3 test-bt-handshake.py ton-serveur.com 42069
+```
+
+Le script envoie un vrai handshake BitTorrent et vérifie la réponse.
+
+#### Méthode 2: Vérifier la Connexion TCP Basique
+
+```bash
+# Test avec timeout (si ça se connecte = port ouvert)
+timeout 3 bash -c "cat < /dev/null > /dev/tcp/ton-serveur.com/42069"
+echo $?  # 0 = succès, port ouvert !
+```
+
+#### Méthode 3: Utiliser netcat
+
+```bash
+# Envoyer des données et voir si ça se connecte
+echo "test" | nc -w 1 ton-serveur.com 42069
+# Si ça se connecte (même sans réponse) = port ouvert !
+```
+
+#### Méthode 4: Vérifier avec tcpdump
+
+```bash
+# Sur le serveur
+sudo tcpdump -i any port 42069 -n
+
+# Depuis l'extérieur, faire un simple telnet
+telnet ton-serveur.com 42069
+```
+
+Si tu vois dans tcpdump:
+```
+IP peer > serveur:42069: Flags [S]    ← SYN (demande connexion)
+IP serveur:42069 > peer: Flags [S.]   ← SYN-ACK (accepté ✅)
+IP peer > serveur:42069: Flags [.]    ← ACK (connexion établie ✅)
+```
+
+**Ton port est OUVERT et ACCESSIBLE ! ✅**
+
+Si tu vois:
+```
+IP peer > serveur:42069: Flags [S]    ← SYN
+(pas de réponse ou timeout)           ← Port fermé/filtré ❌
+```
+
+**Ton port est FERMÉ ou FIREWALL bloque. ❌**
+
+### 🎯 Test Ultime: Ajouter un Vrai Torrent
+
+La meilleure façon de tester:
+
+1. Ajouter un torrent **populaire** (beaucoup de peers/seeders)
+2. Attendre qu'il soit complet (100%)
+3. Activer le seeding
+4. Attendre **5-10 minutes** (le tracker doit réannoncer)
+5. Vérifier les logs:
+
+```bash
+podman logs torrentui | grep "Upload Stats"
+```
+
+Tu devrais voir:
+```
+📤 Upload Stats [nom-torrent]: 1234567 bytes uploaded, 8 active conns, 25 peers total
+```
+
+Si `active conns > 0` → **Ton port fonctionne ! 🎉**
+
+Si `active conns = 0` après 10 minutes → Problème de port/firewall
+
 ## ✅ Configuration Correcte
 
 ### Docker/Podman
