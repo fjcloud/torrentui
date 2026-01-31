@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -740,6 +741,28 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
+// handleDiskSpace handles GET /api/disk-space
+func (s *Server) handleDiskSpace(w http.ResponseWriter, r *http.Request) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.config.DownloadDir, &stat); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to get disk space"), "")
+		return
+	}
+
+	// Available space in bytes
+	available := stat.Bavail * uint64(stat.Bsize)
+	total := stat.Blocks * uint64(stat.Bsize)
+	used := total - (stat.Bfree * uint64(stat.Bsize))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"available": available,
+		"total":     total,
+		"used":      used,
+		"usedPct":   float64(used) / float64(total) * 100,
+	})
+}
+
 // handleGetTorrents handles GET /api/torrents
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	torrents := make([]Torrent, 0)
@@ -1264,6 +1287,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// API routes (with auth middleware)
 	mux.HandleFunc("/api/health", s.authMiddleware(s.handleHealth))
+	mux.HandleFunc("/api/disk-space", s.authMiddleware(s.handleDiskSpace))
 	mux.HandleFunc("/api/torrents", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

@@ -259,8 +259,8 @@ class TorrentUI {
                         ${t.seeding ? '⏸ Stop' : '▶ Seed'}
                     </button>
                     <button class="btn-primary" 
-                            onclick="torrentUI.exportTorrent('${t.infoHash}')">
-                        📤 Export
+                            onclick="torrentUI.downloadTorrent('${t.infoHash}')">
+                        💾 Download
                     </button>
                     <button class="btn-danger" 
                             onclick="torrentUI.deleteTorrent('${t.infoHash}', false)">
@@ -328,10 +328,10 @@ class TorrentUI {
         }
     }
 
-    async exportTorrent(infoHash) {
+    async downloadTorrent(infoHash) {
         try {
             const response = await fetch(`/api/torrents/${infoHash}/export`);
-            if (!response.ok) throw new Error('Failed to export');
+            if (!response.ok) throw new Error('Failed to download');
 
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
@@ -341,7 +341,7 @@ class TorrentUI {
             a.click();
             URL.revokeObjectURL(url);
 
-            this.showToast('Torrent exported', 'success');
+            this.showToast('Torrent file downloaded', 'success');
         } catch (error) {
             this.showToast(error.message, 'error');
         }
@@ -375,12 +375,32 @@ class TorrentUI {
 
     startPolling() {
         this.loadTorrents();
+        this.loadDiskSpace();
         this.pollingInterval = setInterval(() => {
             this.loadTorrents();
+            this.loadDiskSpace();
             if (this.selectedTorrent) {
                 this.loadFiles(this.selectedTorrent);
             }
         }, 5000);
+    }
+
+    async loadDiskSpace() {
+        try {
+            const response = await fetch('/api/disk-space');
+            if (!response.ok) return;
+            
+            const data = await response.json();
+            const diskSpaceEl = document.getElementById('diskSpace');
+            if (diskSpaceEl) {
+                const available = this.formatBytes(data.available);
+                const total = this.formatBytes(data.total);
+                const usedPct = data.usedPct.toFixed(1);
+                diskSpaceEl.textContent = `💾 Disk space: ${available} free of ${total} (${usedPct}% used)`;
+            }
+        } catch (error) {
+            // Silent fail
+        }
     }
 
     showToast(message, type = 'success') {
