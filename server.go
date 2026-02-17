@@ -815,9 +815,9 @@ func (s *Server) handleYggAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Download .torrent from ygege sidecar
+	// Download .torrent from ygege sidecar (YGG enforces a ~30s wait)
 	ygegeURL := fmt.Sprintf("%s/torrent/%s", s.config.YgegeURL, yggID)
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(ygegeURL)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to download torrent from YGG"), err.Error())
@@ -1582,7 +1582,14 @@ func main() {
 		log.Printf("YGG search: %s", config.YgegeURL)
 	}
 
-	if err := http.ListenAndServe(config.ListenAddr, mux); err != nil {
+	httpServer := &http.Server{
+		Addr:         config.ListenAddr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 180 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

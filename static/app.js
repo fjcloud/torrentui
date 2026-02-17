@@ -474,7 +474,7 @@ class TorrentUI {
             btn.style.minWidth = btn.offsetWidth + 'px';
         }
 
-        let seconds = 30;
+        let seconds = 35;
         const countdown = btn ? setInterval(() => {
             btn.textContent = `${seconds}s...`;
             seconds--;
