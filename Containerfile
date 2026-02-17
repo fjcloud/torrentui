@@ -2,7 +2,7 @@
 # Multi-stage build using UBI Red Hat minimal image
 
 # Stage 1: Build stage
-FROM registry.access.redhat.com/ubi8/go-toolset:1.21 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS builder
 
 # Set working directory
 WORKDIR /workspace
@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 go build \
     -o /tmp/torrentui server.go
 
 # Stage 2: Runtime stage
-FROM registry.access.redhat.com/ubi8/ubi-minimal:8.8
+FROM registry.access.redhat.com/ubi9/ubi-minimal
 
 # Install necessary packages
 RUN microdnf update -y && \
