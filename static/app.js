@@ -471,10 +471,20 @@ class TorrentUI {
     async yggAdd(id, btn) {
         if (btn) {
             btn.disabled = true;
-            btn.textContent = '...';
+            btn.style.minWidth = btn.offsetWidth + 'px';
         }
+
+        let seconds = 30;
+        const countdown = btn ? setInterval(() => {
+            btn.textContent = `${seconds}s...`;
+            seconds--;
+            if (seconds < 0) clearInterval(countdown);
+        }, 1000) : null;
+        if (btn) btn.textContent = `${seconds}s...`;
+
         try {
             const response = await fetch(`/api/ygg/add/${id}`, { method: 'POST' });
+            if (countdown) clearInterval(countdown);
             if (!response.ok) {
                 const err = await response.json();
                 throw new Error(err.error || 'Failed to add torrent');
@@ -487,6 +497,7 @@ class TorrentUI {
             }
             this.loadTorrents();
         } catch (error) {
+            if (countdown) clearInterval(countdown);
             this.showToast(error.message, 'error');
             if (btn) {
                 btn.disabled = false;
