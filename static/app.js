@@ -174,8 +174,22 @@ class TorrentUI {
             const response = await fetch('/api/torrents');
             const torrents = await response.json();
             this.renderTorrents(torrents);
+            this.updateTotalUpload(torrents);
         } catch (error) {
             console.error('Error loading torrents:', error);
+        }
+    }
+
+    updateTotalUpload(torrents) {
+        const totalBytes = torrents.reduce((sum, t) => sum + (t.seededBytes || 0), 0);
+        const totalRate = torrents.reduce((sum, t) => sum + (t.uploadRate || 0), 0);
+        const el = document.getElementById('totalUpload');
+        if (el) {
+            let text = `⬆️ Total upload: ${this.formatBytes(totalBytes)}`;
+            if (totalRate > 0) {
+                text += ` (${this.formatSpeed(totalRate)})`;
+            }
+            el.textContent = text;
         }
     }
 
