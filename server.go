@@ -876,8 +876,8 @@ func (s *Server) handleYggTaskStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) yggDownloadWorker(task *yggTask) {
 	task.Status = "downloading"
 
-	// Use the documented /download?id= endpoint
-	ygegeURL := fmt.Sprintf("%s/download?id=%s", s.config.YgegeURL, task.YggID)
+	// GET /torrent/{id} — confirmed from ygege source (rest/torrent.rs)
+	ygegeURL := fmt.Sprintf("%s/torrent/%s", s.config.YgegeURL, task.YggID)
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(ygegeURL)
 	if err != nil {
