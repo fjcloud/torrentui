@@ -148,16 +148,13 @@ func NewServer(config *Config) (*Server, error) {
 	if config.TorrentListenPort > 0 {
 		clientConfig.ListenPort = config.TorrentListenPort
 		clientConfig.DisableIPv6 = false
-		log.Printf("Torrent client listening on port %d for incoming connections", config.TorrentListenPort)
 	}
 
 	// Set public IP if configured (helps with seeding)
 	if config.PublicIP != "" {
 		clientConfig.PublicIp4 = net.ParseIP(config.PublicIP)
-		if clientConfig.PublicIp4 != nil {
-			log.Printf("Using public IP: %s", config.PublicIP)
-		} else {
-			log.Printf("⚠️  Invalid PUBLIC_IP format: %s", config.PublicIP)
+		if clientConfig.PublicIp4 == nil {
+			log.Printf("[warn] invalid PUBLIC_IP: %s", config.PublicIP)
 		}
 	}
 
@@ -175,11 +172,6 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create torrent client: %w", err)
 	}
 
-	// Log torrent client info
-	log.Printf("✅ Torrent client started")
-	log.Printf("   Listen address: %s", client.ListenAddrs())
-	log.Printf("   Peer ID: %s", client.PeerID())
-
 	server := &Server{
 		config:         config,
 		client:         client,
@@ -189,27 +181,9 @@ func NewServer(config *Config) (*Server, error) {
 		loginLimiters:  make(map[string]*rate.Limiter),
 	}
 
-	// Start a goroutine to periodically log upload stats
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			for _, t := range client.Torrents() {
-				if t.Seeding() {
-					stats := t.Stats()
-					log.Printf("📤 Upload Stats [%s]: %d bytes uploaded, %d active conns, %d peers total",
-						t.Name(),
-						stats.BytesWrittenData.Int64(),
-						stats.ActivePeers,
-						stats.ConnectedSeeders+stats.ActivePeers)
-				}
-			}
-		}
-	}()
-
 	// Load existing torrents from disk
 	if err := server.loadTorrentsFromDisk(); err != nil {
-		log.Printf("Warning: failed to load torrents from disk: %v", err)
+		log.Printf("[warn] load torrents: %v", err)
 	}
 
 	return server, nil
@@ -233,22 +207,19 @@ func (s *Server) loadTorrentsFromDisk() error {
 			torrentPath := filepath.Join(torrentsDir, file.Name())
 			t, err := s.client.AddTorrentFromFile(torrentPath)
 			if err != nil {
-				log.Printf("Failed to load torrent %s: %v", file.Name(), err)
+				log.Printf("[warn] skip %s: %v", file.Name(), err)
 				continue
 			}
 
-			// Wait for info and start downloading
 			<-t.GotInfo()
 			t.DownloadAll()
 			t.AllowDataUpload()
-
 			loaded++
-			log.Printf("Loaded torrent: %s", t.Name())
 		}
 	}
 
 	if loaded > 0 {
-		log.Printf("Loaded %d torrent(s) from disk", loaded)
+		log.Printf("Loaded %d torrent(s)", loaded)
 	}
 
 	return nil
@@ -630,10 +601,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ip = ip[:idx]
 	}
 
-	// Check rate limit
 	limiter := s.getLoginLimiter(ip)
 	if !limiter.Allow() {
-		log.Printf("Rate limit exceeded for IP: %s", ip)
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("too many login attempts"), "Please try again later")
 		return
 	}
@@ -648,18 +617,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check username
 	if payload.Username != s.config.Username {
-		time.Sleep(100 * time.Millisecond) // Prevent timing attacks
-		log.Printf("Failed login attempt for username: %s from IP: %s", payload.Username, ip)
+		time.Sleep(100 * time.Millisecond)
+		log.Printf("[auth] failed login from %s", ip)
 		writeError(w, http.StatusUnauthorized, fmt.Errorf("invalid credentials"), "")
 		return
 	}
 
-	// Check password with bcrypt
 	if err := verifyPassword(payload.Password, s.config.PasswordHash); err != nil {
-		time.Sleep(100 * time.Millisecond) // Prevent timing attacks
-		log.Printf("Failed login attempt for user: %s from IP: %s", s.config.Username, ip)
+		time.Sleep(100 * time.Millisecond)
+		log.Printf("[auth] failed login from %s", ip)
 		writeError(w, http.StatusUnauthorized, fmt.Errorf("invalid credentials"), "")
 		return
 	}
@@ -682,7 +649,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(s.config.SessionTimeout.Seconds()),
 	})
 
-	log.Printf("Successful login for user: %s from IP: %s", s.config.Username, ip)
+	log.Printf("[auth] login OK from %s", ip)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
@@ -898,10 +865,10 @@ func (s *Server) handleYggAdd(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(torrentsDir, 0755)
 	persistentPath := filepath.Join(torrentsDir, t.InfoHash().HexString()+".torrent")
 	if err := os.WriteFile(persistentPath, torrentData, 0644); err != nil {
-		log.Printf("Warning: failed to save torrent file: %v", err)
+		log.Printf("[warn] persist torrent: %v", err)
 	}
 
-	log.Printf("✅ Added torrent from YGG: %s (ID: %s, InfoHash: %s)", t.Name(), yggID, t.InfoHash().HexString())
+	log.Printf("Added from YGG: %s", t.Name())
 
 	t.DownloadAll()
 	t.AllowDataUpload()
@@ -981,24 +948,13 @@ func (s *Server) handlePostTorrents(w http.ResponseWriter, r *http.Request) {
 		os.MkdirAll(torrentsDir, 0755)
 		persistentPath := filepath.Join(torrentsDir, t.InfoHash().HexString()+".torrent")
 		if err := os.WriteFile(persistentPath, fileContent, 0644); err != nil {
-			log.Printf("Warning: failed to save torrent file: %v", err)
+			log.Printf("[warn] persist torrent: %v", err)
 		}
 
-		log.Printf("✅ Added torrent: %s (InfoHash: %s)", t.Name(), t.InfoHash().HexString())
-
-		// Log tracker info
-		if metaInfo := t.Metainfo(); metaInfo.Announce != "" {
-			log.Printf("   📡 Tracker: %s", metaInfo.Announce)
-		}
-		if announceList := t.Metainfo().AnnounceList; len(announceList) > 0 {
-			log.Printf("   📡 %d tracker tiers configured", len(announceList))
-		}
+		log.Printf("Added: %s", t.Name())
 
 		t.DownloadAll()
-
-		// Allow data upload for seeding
 		t.AllowDataUpload()
-		log.Printf("   📤 Upload enabled for: %s", t.Name())
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -1149,7 +1105,7 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("Deleted torrent: %s", infoHash)
+	log.Printf("Removed: %s", infoHash[:8])
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1357,7 +1313,6 @@ func (s *Server) handleStartSeeding(w http.ResponseWriter, r *http.Request) {
 
 	t.AllowDataUpload()
 	s.seedStartTimes[infoHash] = time.Now()
-	log.Printf("Started seeding: %s", t.Name())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1384,7 +1339,6 @@ func (s *Server) handleStopSeeding(w http.ResponseWriter, r *http.Request) {
 
 	t.DisallowDataUpload()
 	delete(s.seedStartTimes, infoHash)
-	log.Printf("Stopped seeding: %s", t.Name())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1555,10 +1509,8 @@ func loadConfig() *Config {
 		YgegeURL:            getEnv("YGEGE_URL", ""),
 	}
 
-	// Security warnings
 	if username != "" && !secureCookie {
-		log.Println("⚠️  WARNING: Secure cookie disabled. Session tokens will be sent over unencrypted connections.")
-		log.Println("⚠️  Set TORRENTUI_SECURE_COOKIE=true and use HTTPS in production!")
+		log.Println("[warn] secure cookie disabled — enable TORRENTUI_SECURE_COOKIE with HTTPS")
 	}
 
 	return config
@@ -1583,7 +1535,8 @@ func getEnvInt64(key string, defaultValue int64) int64 {
 }
 
 func main() {
-	// Setup logging
+	log.SetFlags(log.Ldate | log.Ltime)
+
 	logFile := os.Getenv("TORRENTUI_LOG_FILE")
 	if logFile != "" {
 		file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -1616,13 +1569,17 @@ func main() {
 	// Setup routes and start server
 	mux := server.setupRoutes()
 
+	auth := "off"
 	if config.Username != "" {
-		log.Printf("TorrentUI starting on %s (authentication enabled)", config.ListenAddr)
-	} else {
-		log.Printf("TorrentUI starting on %s (no authentication)", config.ListenAddr)
+		auth = "on"
+	}
+	log.Printf("TorrentUI %s | auth=%s | dl=%s | data=%s",
+		config.ListenAddr, auth, config.DownloadDir, config.DataDir)
+	if config.TorrentListenPort > 0 {
+		log.Printf("Torrent port: %d", config.TorrentListenPort)
 	}
 	if config.YgegeURL != "" {
-		log.Printf("YGG search enabled via ygege at %s", config.YgegeURL)
+		log.Printf("YGG search: %s", config.YgegeURL)
 	}
 
 	if err := http.ListenAndServe(config.ListenAddr, mux); err != nil {
