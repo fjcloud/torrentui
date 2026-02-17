@@ -123,25 +123,25 @@ func NewServer(config *Config) (*Server, error) {
 	clientConfig := torrent.NewDefaultClientConfig()
 	clientConfig.DataDir = config.DataDir // Metadata goes here
 
-	// Disable piece completion database to prevent "already complete" issues
-	clientConfig.DisableAcceptRateLimiting = false
-	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir) // Downloads go here
+	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir)
 
-	// Enable seeding and peer connections
+	// Seeding optimizations
+	clientConfig.Seed = true
 	clientConfig.NoUpload = false
+	clientConfig.DisableAggressiveUpload = false
+	clientConfig.DropMutuallyCompletePeers = false
+
+	// Peer discovery
 	clientConfig.DisableTrackers = false
 	clientConfig.DisableWebseeds = false
 	clientConfig.DisableWebtorrent = false
 	clientConfig.DisablePEX = false
-	clientConfig.Seed = true
 
-	// Optimize for seeding: increase connection limits
-	clientConfig.EstablishedConnsPerTorrent = 200 // Max connections per torrent
-	clientConfig.HalfOpenConnsPerTorrent = 50     // Max half-open connections
-	clientConfig.TorrentPeersHighWater = 200      // High water mark for peers
-	clientConfig.TorrentPeersLowWater = 50        // Low water mark for peers
-
-	// Announce more frequently to trackers to maximize visibility
+	// Connection limits
+	clientConfig.EstablishedConnsPerTorrent = 200
+	clientConfig.HalfOpenConnsPerTorrent = 50
+	clientConfig.TorrentPeersHighWater = 500
+	clientConfig.TorrentPeersLowWater = 50
 	clientConfig.MinDialTimeout = 3 * time.Second
 
 	// Configure listening port for incoming connections (seeding)
