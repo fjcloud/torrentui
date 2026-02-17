@@ -40,6 +40,39 @@ Open http://localhost:8080
 | `SESSION_TIMEOUT_HOURS` | `24` | Session timeout |
 | `TORRENT_LISTEN_PORT` | `0` (random) | Port for incoming torrent connections |
 | `PUBLIC_IP` | — | Public IP address (improves seeding) |
+| `YGEGE_URL` | — | URL of ygege sidecar for YGG search (e.g. `http://ygege:8715`) |
+
+## YGG Search Integration
+
+TorrentUI can search and download torrents from YGG via [ygege](https://github.com/UwUDev/ygege) as a sidecar.
+
+```yaml
+# docker-compose.yml
+services:
+  torrentui:
+    image: ghcr.io/fjcloud/torrentui:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./data:/app/data
+    environment:
+      - YGEGE_URL=http://ygege:8715
+      - TORRENTUI_USERNAME=admin
+      - TORRENTUI_PASSWORD=your-password
+    depends_on:
+      - ygege
+
+  ygege:
+    image: ghcr.io/uwudev/ygege:latest
+    environment:
+      - YGG_USERNAME=your-ygg-username
+      - YGG_PASSWORD=your-ygg-password
+      - BIND_IP=0.0.0.0
+      - BIND_PORT=8715
+```
+
+When `YGEGE_URL` is set, a search bar appears in the UI allowing you to search YGG and add torrents directly.
 
 ## Container
 

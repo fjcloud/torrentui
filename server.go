@@ -43,6 +43,7 @@ type Config struct {
 	SecureCookie        bool
 	TorrentListenPort   int
 	PublicIP            string
+	YgegeURL            string // URL of ygege sidecar (e.g. http://ygege:8715)
 }
 
 // Torrent represents a torrent in the API
@@ -763,6 +764,153 @@ func (s *Server) handleDiskSpace(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleYggStatus handles GET /api/ygg/status
+func (s *Server) handleYggStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.config.YgegeURL == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"enabled": false})
+		return
+	}
+
+	resp, err := http.Get(s.config.YgegeURL + "/health")
+	healthy := err == nil && resp != nil && resp.StatusCode == http.StatusOK
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": true,
+		"healthy": healthy,
+	})
+}
+
+// handleYggSearch handles GET /api/ygg/search?q=...&sort=...&order=...
+func (s *Server) handleYggSearch(w http.ResponseWriter, r *http.Request) {
+	if s.config.YgegeURL == "" {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("YGG search not configured"), "Set YGEGE_URL to enable")
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("query parameter 'q' is required"), "")
+		return
+	}
+
+	// Build ygege search URL
+	ygegeURL := fmt.Sprintf("%s/search?name=%s", s.config.YgegeURL, query)
+	if sortParam := r.URL.Query().Get("sort"); sortParam != "" {
+		ygegeURL += "&sort=" + sortParam
+	}
+	if orderParam := r.URL.Query().Get("order"); orderParam != "" {
+		ygegeURL += "&order=" + orderParam
+	}
+	if category := r.URL.Query().Get("category"); category != "" {
+		ygegeURL += "&category=" + category
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(ygegeURL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to reach YGG search"), err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to read YGG response"), "")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
+}
+
+// handleYggAdd handles POST /api/ygg/add/{id} - downloads .torrent from ygege and adds to client
+func (s *Server) handleYggAdd(w http.ResponseWriter, r *http.Request) {
+	if s.config.YgegeURL == "" {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("YGG search not configured"), "Set YGEGE_URL to enable")
+		return
+	}
+
+	// Extract torrent ID from path: /api/ygg/add/12345
+	yggID := strings.TrimPrefix(r.URL.Path, "/api/ygg/add/")
+	if yggID == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("torrent ID required"), "")
+		return
+	}
+
+	// Validate ID is numeric
+	if _, err := strconv.Atoi(yggID); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid torrent ID"), "")
+		return
+	}
+
+	// Download .torrent from ygege sidecar
+	ygegeURL := fmt.Sprintf("%s/torrent/%s", s.config.YgegeURL, yggID)
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(ygegeURL)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to download torrent from YGG"), err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		writeError(w, http.StatusBadGateway, fmt.Errorf("YGG download failed: %s", resp.Status), string(body))
+		return
+	}
+
+	// Read .torrent file content
+	torrentData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to read torrent data"), "")
+		return
+	}
+
+	// Save to temp file and add to client
+	tmpFile, err := os.CreateTemp("", "ygg_*.torrent")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to create temp file"), "")
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(torrentData); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to write temp file"), "")
+		return
+	}
+	tmpFile.Close()
+
+	t, err := s.client.AddTorrentFromFile(tmpFile.Name())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid torrent file from YGG"), err.Error())
+		return
+	}
+
+	<-t.GotInfo()
+
+	// Save torrent file persistently
+	torrentsDir := filepath.Join(s.config.DataDir, "torrents")
+	os.MkdirAll(torrentsDir, 0755)
+	persistentPath := filepath.Join(torrentsDir, t.InfoHash().HexString()+".torrent")
+	if err := os.WriteFile(persistentPath, torrentData, 0644); err != nil {
+		log.Printf("Warning: failed to save torrent file: %v", err)
+	}
+
+	log.Printf("✅ Added torrent from YGG: %s (ID: %s, InfoHash: %s)", t.Name(), yggID, t.InfoHash().HexString())
+
+	t.DownloadAll()
+	t.AllowDataUpload()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(s.torrentToAPI(t))
+}
+
 // handleGetTorrents handles GET /api/torrents
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	torrents := make([]Torrent, 0)
@@ -1288,6 +1436,17 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// API routes (with auth middleware)
 	mux.HandleFunc("/api/health", s.authMiddleware(s.handleHealth))
 	mux.HandleFunc("/api/disk-space", s.authMiddleware(s.handleDiskSpace))
+
+	// YGG search routes (proxied to ygege sidecar)
+	mux.HandleFunc("/api/ygg/status", s.authMiddleware(s.handleYggStatus))
+	mux.HandleFunc("/api/ygg/search", s.authMiddleware(s.handleYggSearch))
+	mux.HandleFunc("/api/ygg/add/", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			s.handleYggAdd(w, r)
+		} else {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"), "")
+		}
+	}))
 	mux.HandleFunc("/api/torrents", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -1393,6 +1552,7 @@ func loadConfig() *Config {
 		SecureCookie:        secureCookie,
 		TorrentListenPort:   int(getEnvInt64("TORRENT_LISTEN_PORT", 0)),
 		PublicIP:            getEnv("PUBLIC_IP", ""),
+		YgegeURL:            getEnv("YGEGE_URL", ""),
 	}
 
 	// Security warnings
@@ -1460,6 +1620,9 @@ func main() {
 		log.Printf("TorrentUI starting on %s (authentication enabled)", config.ListenAddr)
 	} else {
 		log.Printf("TorrentUI starting on %s (no authentication)", config.ListenAddr)
+	}
+	if config.YgegeURL != "" {
+		log.Printf("YGG search enabled via ygege at %s", config.YgegeURL)
 	}
 
 	if err := http.ListenAndServe(config.ListenAddr, mux); err != nil {

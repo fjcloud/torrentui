@@ -141,6 +141,14 @@ class TorrentUI {
                 this.showToast('Please select a .torrent file', 'error');
             }
         });
+
+        // YGG search: Enter key
+        const yggQuery = document.getElementById('yggQuery');
+        if (yggQuery) {
+            yggQuery.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') this.yggSearch();
+            });
+        }
     }
 
     async handleFileUpload() {
@@ -387,9 +395,110 @@ class TorrentUI {
         window.open(url, '_blank');
     }
 
+    // --- YGG Search ---
+
+    async checkYggStatus() {
+        try {
+            const response = await fetch('/api/ygg/status');
+            if (!response.ok) return;
+            const data = await response.json();
+            const section = document.getElementById('yggSection');
+            const badge = document.getElementById('yggBadge');
+            if (!data.enabled) {
+                section.classList.add('hidden');
+                return;
+            }
+            section.classList.remove('hidden');
+            if (data.healthy) {
+                badge.textContent = 'online';
+                badge.classList.add('online');
+            } else {
+                badge.textContent = 'offline';
+                badge.classList.remove('online');
+            }
+        } catch (error) {
+            // silent
+        }
+    }
+
+    async yggSearch() {
+        const query = document.getElementById('yggQuery').value.trim();
+        if (!query) return;
+
+        const resultsDiv = document.getElementById('yggResults');
+        resultsDiv.innerHTML = '<div class="ygg-search-status">Searching...</div>';
+
+        try {
+            const response = await fetch(`/api/ygg/search?q=${encodeURIComponent(query)}&sort=seed&order=desc`);
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Search failed');
+            }
+
+            const results = await response.json();
+            this.renderYggResults(results);
+        } catch (error) {
+            resultsDiv.innerHTML = `<div class="ygg-search-status" style="color: var(--danger);">${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    renderYggResults(results) {
+        const resultsDiv = document.getElementById('yggResults');
+
+        if (!results || results.length === 0) {
+            resultsDiv.innerHTML = '<div class="ygg-search-status">No results found</div>';
+            return;
+        }
+
+        resultsDiv.innerHTML = `<div class="ygg-results">${results.map(r => `
+            <div class="ygg-result-item">
+                <div style="min-width: 0;">
+                    <div class="ygg-result-name" title="${this.escapeHtml(r.name)}">${this.escapeHtml(r.name)}</div>
+                    <div class="ygg-result-meta">
+                        <span>${this.formatBytes(r.size)}</span>
+                        <span class="seed">S: ${r.seed}</span>
+                        <span class="leech">L: ${r.leech}</span>
+                        <span>${r.completed} done</span>
+                    </div>
+                </div>
+                <button class="btn-primary btn-sm" onclick="torrentUI.yggAdd(${r.id}, this)">
+                    + Add
+                </button>
+            </div>
+        `).join('')}</div>`;
+    }
+
+    async yggAdd(id, btn) {
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '...';
+        }
+        try {
+            const response = await fetch(`/api/ygg/add/${id}`, { method: 'POST' });
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Failed to add torrent');
+            }
+            this.showToast('Torrent added from YGG', 'success');
+            if (btn) {
+                btn.textContent = '✓';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+            }
+            this.loadTorrents();
+        } catch (error) {
+            this.showToast(error.message, 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '+ Add';
+            }
+        }
+    }
+
     startPolling() {
         this.loadTorrents();
         this.loadDiskSpace();
+        this.checkYggStatus();
         this.pollingInterval = setInterval(() => {
             this.loadTorrents();
             this.loadDiskSpace();
@@ -459,9 +568,5 @@ class TorrentUI {
 
 // Initialize
 const torrentUI = new TorrentUI();
-
-
-
-
 
 
