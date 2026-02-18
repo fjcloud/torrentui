@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -776,17 +777,19 @@ func (s *Server) handleYggSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build ygege search URL
-	ygegeURL := fmt.Sprintf("%s/search?name=%s", s.config.YgegeURL, query)
+	// Build ygege search URL with proper encoding
+	params := url.Values{}
+	params.Set("name", query)
 	if sortParam := r.URL.Query().Get("sort"); sortParam != "" {
-		ygegeURL += "&sort=" + sortParam
+		params.Set("sort", sortParam)
 	}
 	if orderParam := r.URL.Query().Get("order"); orderParam != "" {
-		ygegeURL += "&order=" + orderParam
+		params.Set("order", orderParam)
 	}
 	if category := r.URL.Query().Get("category"); category != "" {
-		ygegeURL += "&category=" + category
+		params.Set("category", category)
 	}
+	ygegeURL := fmt.Sprintf("%s/search?%s", s.config.YgegeURL, params.Encode())
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(ygegeURL)
