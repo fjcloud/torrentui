@@ -471,80 +471,26 @@ class TorrentUI {
     async yggAdd(id, btn) {
         if (btn) {
             btn.disabled = true;
-            btn.style.minWidth = btn.offsetWidth + 'px';
-            btn.textContent = 'Starting...';
+            btn.textContent = '✓ Queued';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success');
         }
 
         try {
-            // Start async download — returns immediately with a task ID
             const response = await fetch(`/api/ygg/add/${id}`, { method: 'POST' });
             if (!response.ok) {
                 const err = await response.json();
-                throw new Error(err.error || 'Failed to start download');
+                throw new Error(err.error || 'Failed to queue download');
             }
-            const task = await response.json();
-
-            // Poll for task completion
-            await this.pollYggTask(task.id, btn);
+            this.showToast('Torrent queued — will appear shortly', 'success');
         } catch (error) {
             this.showToast(error.message, 'error');
             if (btn) {
                 btn.disabled = false;
                 btn.textContent = '+ Add';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-primary');
             }
-        }
-    }
-
-    async pollYggTask(taskId, btn) {
-        let elapsed = 0;
-        const pollInterval = 2000;
-        const maxWait = 120000;
-
-        if (btn) btn.textContent = 'Waiting YGG...';
-
-        while (elapsed < maxWait) {
-            await new Promise(r => setTimeout(r, pollInterval));
-            elapsed += pollInterval;
-
-            try {
-                const resp = await fetch(`/api/ygg/task/${taskId}`);
-                if (!resp.ok) throw new Error('Task lost');
-                const task = await resp.json();
-
-                if (task.status === 'done') {
-                    this.showToast(`Added: ${task.torrentName || 'torrent'}`, 'success');
-                    if (btn) {
-                        btn.textContent = '✓';
-                        btn.classList.remove('btn-primary');
-                        btn.classList.add('btn-success');
-                    }
-                    this.loadTorrents();
-                    return;
-                }
-                if (task.status === 'error') {
-                    throw new Error(task.error || 'Download failed');
-                }
-
-                // Update button with status
-                if (btn) {
-                    const secs = Math.round(elapsed / 1000);
-                    const label = task.status === 'downloading' ? 'Downloading' : 'Adding';
-                    btn.textContent = `${label}... ${secs}s`;
-                }
-            } catch (error) {
-                this.showToast(error.message, 'error');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '+ Add';
-                }
-                return;
-            }
-        }
-
-        this.showToast('Download timed out (>2min)', 'error');
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = '+ Add';
         }
     }
 
