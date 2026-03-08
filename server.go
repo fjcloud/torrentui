@@ -11,7 +11,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,7 +43,6 @@ type Config struct {
 	SecureCookie        bool
 	TorrentListenPort   int
 	PublicIP            string
-	YgegeURL            string // URL of ygege sidecar (e.g. http://ygege:8715)
 }
 
 // Torrent represents a torrent in the API
@@ -97,15 +95,6 @@ type torrentStats struct {
 	uploadRate       int64 // bytes per second
 }
 
-// yggTask tracks an async YGG download
-type yggTask struct {
-	ID      string `json:"id"`
-	YggID   string `json:"yggId"`
-	Status  string `json:"status"` // "pending", "downloading", "adding", "done", "error"
-	Error   string `json:"error,omitempty"`
-	Torrent string `json:"torrentName,omitempty"`
-}
-
 // Server holds the application state
 type Server struct {
 	config         *Config
@@ -117,8 +106,6 @@ type Server struct {
 	sessionsMux    sync.RWMutex
 	loginLimiters  map[string]*rate.Limiter // Rate limiters per IP
 	limitersMux    sync.RWMutex
-	yggTasks       map[string]*yggTask // Async YGG download tasks
-	yggTasksMux    sync.RWMutex
 }
 
 // NewServer creates a new server instance
@@ -191,7 +178,6 @@ func NewServer(config *Config) (*Server, error) {
 		torrentStats:   make(map[string]*torrentStats),
 		sessions:       make(map[string]*Session),
 		loginLimiters:  make(map[string]*rate.Limiter),
-		yggTasks:       make(map[string]*yggTask),
 	}
 
 	// Load existing torrents from disk
@@ -744,227 +730,6 @@ func (s *Server) handleDiskSpace(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleYggStatus handles GET /api/ygg/status
-func (s *Server) handleYggStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if s.config.YgegeURL == "" {
-		json.NewEncoder(w).Encode(map[string]interface{}{"enabled": false})
-		return
-	}
-
-	resp, err := http.Get(s.config.YgegeURL + "/health")
-	healthy := err == nil && resp != nil && resp.StatusCode == http.StatusOK
-	if resp != nil {
-		resp.Body.Close()
-	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"enabled": true,
-		"healthy": healthy,
-	})
-}
-
-// handleYggSearch handles GET /api/ygg/search?q=...&sort=...&order=...
-func (s *Server) handleYggSearch(w http.ResponseWriter, r *http.Request) {
-	if s.config.YgegeURL == "" {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("YGG search not configured"), "Set YGEGE_URL to enable")
-		return
-	}
-
-	query := r.URL.Query().Get("q")
-	if query == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("query parameter 'q' is required"), "")
-		return
-	}
-
-	// Build ygege search URL with proper encoding
-	params := url.Values{}
-	params.Set("name", query)
-	if sortParam := r.URL.Query().Get("sort"); sortParam != "" {
-		params.Set("sort", sortParam)
-	}
-	if orderParam := r.URL.Query().Get("order"); orderParam != "" {
-		params.Set("order", orderParam)
-	}
-	if category := r.URL.Query().Get("category"); category != "" {
-		params.Set("category", category)
-	}
-	ygegeURL := fmt.Sprintf("%s/search?%s", s.config.YgegeURL, params.Encode())
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(ygegeURL)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to reach YGG search"), err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Errorf("failed to read YGG response"), "")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
-}
-
-// handleYggAdd handles POST /api/ygg/add/{id} - starts async download from ygege
-func (s *Server) handleYggAdd(w http.ResponseWriter, r *http.Request) {
-	if s.config.YgegeURL == "" {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("YGG search not configured"), "Set YGEGE_URL to enable")
-		return
-	}
-
-	yggID := strings.TrimPrefix(r.URL.Path, "/api/ygg/add/")
-	if yggID == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("torrent ID required"), "")
-		return
-	}
-	if _, err := strconv.Atoi(yggID); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid torrent ID"), "")
-		return
-	}
-
-	// Generate task ID and start async download
-	taskBytes := make([]byte, 8)
-	rand.Read(taskBytes)
-	taskID := hex.EncodeToString(taskBytes)
-
-	task := &yggTask{ID: taskID, YggID: yggID, Status: "pending"}
-	s.yggTasksMux.Lock()
-	s.yggTasks[taskID] = task
-	s.yggTasksMux.Unlock()
-
-	go s.yggDownloadWorker(task)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(task)
-}
-
-// handleYggTaskStatus handles GET /api/ygg/task/{taskId}
-func (s *Server) handleYggTaskStatus(w http.ResponseWriter, r *http.Request) {
-	taskID := strings.TrimPrefix(r.URL.Path, "/api/ygg/task/")
-	if taskID == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("task ID required"), "")
-		return
-	}
-
-	s.yggTasksMux.RLock()
-	task, ok := s.yggTasks[taskID]
-	s.yggTasksMux.RUnlock()
-
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Errorf("task not found"), "")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
-
-	// Cleanup completed/errored tasks after they've been read
-	if task.Status == "done" || task.Status == "error" {
-		go func() {
-			time.Sleep(30 * time.Second)
-			s.yggTasksMux.Lock()
-			delete(s.yggTasks, taskID)
-			s.yggTasksMux.Unlock()
-		}()
-	}
-}
-
-// yggDownloadWorker runs in a goroutine to download .torrent from ygege and add it
-func (s *Server) yggDownloadWorker(task *yggTask) {
-	task.Status = "downloading"
-
-	// GET /torrent/{id} — confirmed from ygege source (rest/torrent.rs)
-	ygegeURL := fmt.Sprintf("%s/torrent/%s", s.config.YgegeURL, task.YggID)
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(ygegeURL)
-	if err != nil {
-		task.Status = "error"
-		task.Error = fmt.Sprintf("Failed to reach ygege: %v", err)
-		log.Printf("[ygg] download error for %s: %v", task.YggID, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		task.Status = "error"
-		task.Error = fmt.Sprintf("YGG returned %s: %s", resp.Status, truncate(string(body), 200))
-		log.Printf("[ygg] download failed for %s: %s", task.YggID, resp.Status)
-		return
-	}
-
-	torrentData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		task.Status = "error"
-		task.Error = "Failed to read torrent data"
-		return
-	}
-
-	// Validate we got actual torrent data, not HTML
-	ct := resp.Header.Get("Content-Type")
-	if strings.Contains(ct, "text/html") || (len(torrentData) > 0 && torrentData[0] != 'd') {
-		task.Status = "error"
-		task.Error = "YGG returned HTML instead of torrent file (auth issue?)"
-		log.Printf("[ygg] got HTML instead of torrent for %s (Content-Type: %s)", task.YggID, ct)
-		return
-	}
-
-	task.Status = "adding"
-
-	tmpFile, err := os.CreateTemp("", "ygg_*.torrent")
-	if err != nil {
-		task.Status = "error"
-		task.Error = "Failed to create temp file"
-		return
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(torrentData); err != nil {
-		task.Status = "error"
-		task.Error = "Failed to write temp file"
-		return
-	}
-	tmpFile.Close()
-
-	t, err := s.client.AddTorrentFromFile(tmpFile.Name())
-	if err != nil {
-		task.Status = "error"
-		task.Error = fmt.Sprintf("Invalid torrent file: %v", err)
-		log.Printf("[ygg] invalid torrent for %s: %v", task.YggID, err)
-		return
-	}
-
-	<-t.GotInfo()
-
-	// Persist torrent file
-	torrentsDir := filepath.Join(s.config.DataDir, "torrents")
-	os.MkdirAll(torrentsDir, 0755)
-	persistentPath := filepath.Join(torrentsDir, t.InfoHash().HexString()+".torrent")
-	if err := os.WriteFile(persistentPath, torrentData, 0644); err != nil {
-		log.Printf("[warn] persist torrent: %v", err)
-	}
-
-	t.DownloadAll()
-	t.AllowDataUpload()
-
-	task.Status = "done"
-	task.Torrent = t.Name()
-	log.Printf("[ygg] added: %s", t.Name())
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
-
 // handleGetTorrents handles GET /api/torrents
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	torrents := make([]Torrent, 0)
@@ -1478,23 +1243,6 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/health", s.authMiddleware(s.handleHealth))
 	mux.HandleFunc("/api/disk-space", s.authMiddleware(s.handleDiskSpace))
 
-	// YGG search routes (proxied to ygege sidecar)
-	mux.HandleFunc("/api/ygg/status", s.authMiddleware(s.handleYggStatus))
-	mux.HandleFunc("/api/ygg/search", s.authMiddleware(s.handleYggSearch))
-	mux.HandleFunc("/api/ygg/add/", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			s.handleYggAdd(w, r)
-		} else {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"), "")
-		}
-	}))
-	mux.HandleFunc("/api/ygg/task/", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			s.handleYggTaskStatus(w, r)
-		} else {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"), "")
-		}
-	}))
 	mux.HandleFunc("/api/torrents", s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -1600,7 +1348,6 @@ func loadConfig() *Config {
 		SecureCookie:        secureCookie,
 		TorrentListenPort:   int(getEnvInt64("TORRENT_LISTEN_PORT", 0)),
 		PublicIP:            getEnv("PUBLIC_IP", ""),
-		YgegeURL:            getEnv("YGEGE_URL", ""),
 	}
 
 	if username != "" && !secureCookie {
@@ -1672,15 +1419,12 @@ func main() {
 	if config.TorrentListenPort > 0 {
 		log.Printf("Torrent port: %d", config.TorrentListenPort)
 	}
-	if config.YgegeURL != "" {
-		log.Printf("YGG search: %s", config.YgegeURL)
-	}
 
 	httpServer := &http.Server{
 		Addr:         config.ListenAddr,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 180 * time.Second,
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	if err := httpServer.ListenAndServe(); err != nil {
