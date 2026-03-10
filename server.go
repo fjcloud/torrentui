@@ -326,6 +326,16 @@ func (s *Server) torrentToAPI(t *torrent.Torrent) Torrent {
 	stats := t.Stats()
 	infoHash := t.InfoHash().HexString()
 
+	if info == nil {
+		return Torrent{
+			InfoHash: infoHash,
+			Name:     t.Name(),
+			Status:   "fetching_metadata",
+			Peers:    stats.ConnectedSeeders + stats.ActivePeers,
+			AddedAt:  time.Now(),
+		}
+	}
+
 	// Calculate seeding stats
 	totalLength := t.Length()
 	completed := t.BytesCompleted()
