@@ -351,18 +351,22 @@ class TorrentUI {
 
     async downloadTorrent(infoHash) {
         try {
-            const response = await fetch(`/api/torrents/${infoHash}/export`);
-            if (!response.ok) throw new Error('Failed to download');
+            const response = await fetch(`/api/torrents/${infoHash}/files`);
+            if (!response.ok) throw new Error('Failed to fetch file list');
+            const files = await response.json();
 
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${infoHash}.torrent`;
-            a.click();
-            URL.revokeObjectURL(url);
+            const ready = files.filter(f => f.bytesCompleted > 0);
+            if (ready.length === 0) {
+                this.showToast('No files available yet', 'error');
+                return;
+            }
 
-            this.showToast('Torrent file downloaded', 'success');
+            if (ready.length === 1) {
+                this.downloadFile(infoHash, ready[0].path);
+            } else {
+                this.selectTorrent(infoHash);
+                this.showToast('Multiple files — pick one from the list', 'info');
+            }
         } catch (error) {
             this.showToast(error.message, 'error');
         }
