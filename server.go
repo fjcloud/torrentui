@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/storage"
 	"github.com/anacrolix/torrent/types/infohash"
@@ -122,7 +123,18 @@ func NewServer(config *Config) (*Server, error) {
 	clientConfig := torrent.NewDefaultClientConfig()
 	clientConfig.DataDir = config.DataDir // Metadata goes here
 
-	clientConfig.DefaultStorage = storage.NewFile(config.DownloadDir)
+	// Piece completion DB on local disk (fast), not on the download dir which
+	// may be a network mount (SMB/CIFS). Also disable part files to avoid
+	// rename + chmod on completion, which CIFS does not support well.
+	pc, err := storage.NewBoltPieceCompletion(config.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create piece completion db: %w", err)
+	}
+	clientConfig.DefaultStorage = storage.NewFileOpts(storage.NewFileClientOpts{
+		ClientBaseDir:   config.DownloadDir,
+		PieceCompletion: pc,
+		UsePartFiles:    g.Some(false),
+	})
 
 	// Seeding optimizations
 	clientConfig.Seed = true
